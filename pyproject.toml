@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mecat"
-version = "1.0.2"
+version = "1.0.3"
 description = "Multi-Expert Chain for Audio Tasks (MECAT)"
 
 dependencies = [
@@ -44,3 +44,10 @@ Repository = "https://git.n.xiaomi.com/niuyadong/mecat_public.git"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+mecat = [
+  "reference/caption/test/*jsonl.gz",
+  "reference/qa/test/*jsonl.gz",
+]
+

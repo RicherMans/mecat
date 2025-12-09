@@ -1,6 +1,7 @@
 import argparse
 import pandas as pd
 import numpy as np
+import gzip
 import json
 import os
 import glob
@@ -283,7 +284,7 @@ def load_data_with_config(
 
     # Load reference data
     if reference_dir is None:
-        reference_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reference", task, "test")
+        reference_dir = os.path.join(os.path.dirname(__file__), "reference", task, "test")
 
     # Load reference data from files based on task and subtask
     reference_data = {}
@@ -291,9 +292,9 @@ def load_data_with_config(
     if task == "caption":
         # For caption task, load data for the specified subtask
         for subset in subsets:
-            ref_file = os.path.join(reference_dir, f"{subset}.jsonl")
-            if os.path.exists(ref_file):
-                with open(ref_file, "r", encoding="utf-8") as f:
+            ref_file_gz = os.path.join(reference_dir, f"{subset}.jsonl.gz")
+            if os.path.exists(ref_file_gz):
+                with gzip.open(ref_file_gz, "rt", encoding="utf-8") as f:
                     for line in f:
                         try:
                             line_data = json.loads(line.strip())
@@ -301,16 +302,16 @@ def load_data_with_config(
                                 if subtask in value:
                                     reference_data[key] = value[subtask]
                         except Exception as e:
-                            logger.warning(f"Failed to parse line in {ref_file}: {e}")
+                            logger.warning(f"Failed to parse line in {ref_file_gz}: {e}")
                             continue
     else:  # QA 
         logger.info(f"hhahah: {level}")
         # For QA task, load data based on category (subtask) and level
         for subset in subsets:
-            ref_file = os.path.join(reference_dir, f"{subset}.jsonl")
-            if os.path.exists(ref_file):
-                logger.info(ref_file)
-                with open(ref_file, "r", encoding="utf-8") as f:
+            ref_file_gz = os.path.join(reference_dir, f"{subset}.jsonl.gz")
+            if os.path.exists(ref_file_gz):
+                logger.info(ref_file_gz)
+                with gzip.open(ref_file_gz, "rt", encoding="utf-8") as f:
                     for line in f:
                         try:
                             line_data = json.loads(line.strip())

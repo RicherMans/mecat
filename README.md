@@ -366,7 +366,9 @@ MECAT supports multiple evaluation metrics for comprehensive assessment:
 ### 7.1 Installation
 
 ```bash
-pip install git+https://git.n.xiaomi.com/niuyadong/mecat_public.git
+python3 -m pip install mecat
+# Or the development 
+# pip install git+https://git.n.xiaomi.com/niuyadong/mecat_public.git
 ```
 
 ### 7.2 Quick Start with Qwen2-Audio Example

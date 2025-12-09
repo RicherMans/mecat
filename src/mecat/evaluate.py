@@ -292,36 +292,52 @@ def load_data_with_config(
     if task == "caption":
         # For caption task, load data for the specified subtask
         for subset in subsets:
+            # Default in the pacakge are .gz files
             ref_file_gz = os.path.join(reference_dir, f"{subset}.jsonl.gz")
+            ref_file = os.path.join(reference_dir, f"{subset}.jsonl")
             if os.path.exists(ref_file_gz):
-                with gzip.open(ref_file_gz, "rt", encoding="utf-8") as f:
-                    for line in f:
-                        try:
-                            line_data = json.loads(line.strip())
-                            for key, value in line_data.items():
-                                if subtask in value:
-                                    reference_data[key] = value[subtask]
-                        except Exception as e:
-                            logger.warning(f"Failed to parse line in {ref_file_gz}: {e}")
-                            continue
+                file_opener = gzip.open(ref_file_gz, "rt", encoding="utf-8")
+                logger.info(ref_file_gz)
+            elif os.path.exists(ref_file):
+                file_opener = open(ref_file, "r", encoding="utf-8")
+                logger.info(ref_file)
+            else:
+                continue
+            with file_opener as f:
+                for line in f:
+                    try:
+                        line_data = json.loads(line.strip())
+                        for key, value in line_data.items():
+                            if subtask in value:
+                                reference_data[key] = value[subtask]
+                    except Exception as e:
+                        logger.warning(f"Failed to parse line in {ref_file_gz}: {e}")
+                        continue
     else:  # QA 
-        logger.info(f"hhahah: {level}")
         # For QA task, load data based on category (subtask) and level
         for subset in subsets:
+            # Default in the pacakge are .gz files
             ref_file_gz = os.path.join(reference_dir, f"{subset}.jsonl.gz")
+            ref_file = os.path.join(reference_dir, f"{subset}.jsonl")
             if os.path.exists(ref_file_gz):
+                file_opener = gzip.open(ref_file_gz, "rt", encoding="utf-8")
                 logger.info(ref_file_gz)
-                with gzip.open(ref_file_gz, "rt", encoding="utf-8") as f:
-                    for line in f:
-                        try:
-                            line_data = json.loads(line.strip())
-                            for key, value in line_data.items():
-                                # Check if the sample matches the category and level
-                                if value.get("category") in subtask and value.get("difficulty") in level:
-                                    reference_data[key] = value.get("answer", "")
-                        except Exception as e:
-                            logger.warning(f"Failed to parse line in {ref_file}: {e}")
-                            continue
+            elif os.path.exists(ref_file):
+                file_opener = open(ref_file, "r", encoding="utf-8")
+                logger.info(ref_file)
+            else:
+                continue
+            with file_opener as f:
+                for line in f:
+                    try:
+                        line_data = json.loads(line.strip())
+                        for key, value in line_data.items():
+                            # Check if the sample matches the category and level
+                            if value.get("category") in subtask and value.get("difficulty") in level:
+                                reference_data[key] = value.get("answer", "")
+                    except Exception as e:
+                        logger.warning(f"Failed to parse line in {ref_file}: {e}")
+                        continue
 
     # Only keep the samples that are in both predicted and reference data
     common_keys = set(predicted_data.keys()) & set(reference_data.keys())

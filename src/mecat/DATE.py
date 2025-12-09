@@ -1,10 +1,13 @@
 import os
+import hashlib
+import requests
 import gc
 import re
 import pandas as pd
 import torch
 import torch.nn as nn
 from typing import Literal
+from collections import namedtuple
 import sys
 
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), "src"))
@@ -22,8 +25,74 @@ from sentence_transformers.util import (
     batch_to_device,
     truncate_embeddings,
 )
-from fense.download_utils import RemoteFileMetadata, check_download_resource
 
+### 
+# Taken from fense (https://github.com/blmoistawinde/fense/)
+RemoteFileMetadata = namedtuple('RemoteFileMetadata',
+                                ['filename', 'url', 'checksum'])
+
+def get_data_home(data_home=None):
+    if data_home is None:
+        data_home = os.environ.get('FENSE_DATA',
+                                os.path.join('~', '.fense_data'))
+    data_home = os.path.expanduser(data_home)
+    if not os.path.exists(data_home):
+        os.makedirs(data_home)
+    return data_home
+
+def _sha256(path):
+    """Calculate the sha256 hash of the file at path."""
+    sha256hash = hashlib.sha256()
+    chunk_size = 8192
+    with open(path, "rb") as f:
+        while True:
+            buffer = f.read(chunk_size)
+            if not buffer:
+                break
+            sha256hash.update(buffer)
+    return sha256hash.hexdigest()
+
+def _download_with_bar(url, file_path):
+    # Streaming, so we can iterate over the response.
+    response = requests.get(url, stream=True)
+    total_size_in_bytes= int(response.headers.get('content-length', 0))
+    block_size = 1024    # 1 KB
+    progress_bar = tqdm(total=total_size_in_bytes, unit='B', unit_scale=True)
+    with open(file_path, 'wb') as file:
+        for data in response.iter_content(block_size):
+            progress_bar.update(len(data))
+            file.write(data)
+    progress_bar.close()
+    if total_size_in_bytes != 0 and progress_bar.n != total_size_in_bytes:
+        raise Exception("ERROR, something went wrong with the downloading")
+    return file_path
+
+def _fetch_remote(remote, dirname=None):
+    file_path = (remote.filename if dirname is None
+                 else os.path.join(dirname, remote.filename))
+    file_path = _download_with_bar(remote.url, file_path)
+    checksum = _sha256(file_path)
+    if remote.checksum != checksum:
+        raise IOError("{} has an SHA256 checksum ({}) "
+                      "differing from expected ({}), "
+                      "file may be corrupted.".format(file_path, checksum,
+                                                      remote.checksum))
+    return file_path
+
+def download(remote, file_path=None):
+    data_home = get_data_home()
+    file_path = _fetch_remote(remote, data_home)
+    return file_path
+
+def check_download_resource(remote):
+    data_home = get_data_home()
+    file_path = os.path.join(data_home, remote.filename)
+    if not os.path.exists(file_path):
+        # currently don't capture error at this level, assume download success
+        file_path = download(remote, data_home)
+    return file_path
+
+####
 
 class BERTFlatClassifier(nn.Module):
     """
@@ -121,6 +190,7 @@ class RefinedErrorChecker(nn.Module):
         model_name_or_path: str,
         device: Literal["cuda", "cpu"] = None,
         use_proxy: bool = False,
+
         proxies: str = None,
     ):
         """
@@ -151,7 +221,7 @@ class RefinedErrorChecker(nn.Module):
         # Download model if needed
         url, checksum = PRETRAIN_ECHECKERS[model_name_or_path]
         remote = RemoteFileMetadata(filename=f"{model_name_or_path}.ckpt", url=url, checksum=checksum)
-        file_path = check_download_resource(remote, use_proxy, proxies)
+        file_path = check_download_resource(remote)
 
         # Load model state and create classifier
         model_states = torch.load(file_path, weights_only=True)

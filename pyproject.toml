@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mecat"
-version = "1.0.1"
+version = "1.0.2"
 description = "Multi-Expert Chain for Audio Tasks (MECAT)"
 
 dependencies = [
@@ -34,7 +34,7 @@ authors = [
 
 readme = "README.md"
 requires-python = ">=3.10"
-license = {file = "LICENSE"}
+license-files = ["LICENSE"]
 
 [project.scripts]
 mecat-evaluate = "mecat.evaluate:main"

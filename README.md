@@ -18,6 +18,7 @@
   - [7.1 Installation](#71-installation)
   - [7.2 Quick Start with Qwen2-Audio Example](#72-quick-start-with-qwen2-audio-example)
   - [7.3 Command Line Evaluation](#73-command-line-evaluation)
+  - [7.4 Direct Data Evaluation](#74-direct-data-evaluation)
 - [8. Results](#8-results)
 - [9. Acknowledgement](#9-acknowledgement)
 - [10. Contributing](#10-contributing)
@@ -135,6 +136,7 @@ MECAT is a comprehensive benchmark constructed on **large-scale data** to evalua
     <th class="tg-yla0"><span style="font-weight:bold">Level</span></th>
     <th class="tg-yla0"><span style="font-weight:bold">Descrption</span></th>
     <th class="tg-yla0"><span style="font-weight:bold">Evaluated Data Abbreviation</span></th>
+    <th class="tg-yla0"><span style="font-weight:bold">Sample</span></th>
   </tr></thead>
 <tbody>
   <tr>
@@ -144,6 +146,7 @@ MECAT is a comprehensive benchmark constructed on **large-scale data** to evalua
     <td class="tg-cly1">🔵 Specialized</td>
     <td class="tg-cly1">Simplified caption over the whole audio within 15 words</td>
     <td class="tg-cly1">000, 00A, 0M0, 0MA<br>S00, S0A, SM0, SMA</td>
+    <td class="tg-cly1">20052</td>
   </tr>
   <tr>
     <td class="tg-cly1">Long</td>
@@ -151,6 +154,7 @@ MECAT is a comprehensive benchmark constructed on **large-scale data** to evalua
     <td class="tg-cly1">🔵 Specialized</td>
     <td class="tg-cly1">Caption over the whole audio using 1-2 sentences</td>
     <td class="tg-cly1">000, 00A, 0M0, 0MA<br>S00, S0A, SM0, SMA</td>
+    <td class="tg-cly1">20052</td>
   </tr>
   <tr>
     <td class="tg-yla0" rowspan="6"><span style="font-weight:bold">Content-Specific</span></td>
@@ -159,12 +163,14 @@ MECAT is a comprehensive benchmark constructed on **large-scale data** to evalua
     <td class="tg-cly1">🟢 Basic</td>
     <td class="tg-cly1">Caption over clean speech&nbsp;&nbsp;</td>
     <td class="tg-cly1">S00</td>
+    <td class="tg-cly1">7839</td>
   </tr>
   <tr>
     <td class="tg-cly1">Mixed</td>
     <td class="tg-cly1">🔴 Complex</td>
     <td class="tg-cly1">Caption over speech with music/sound interference </td>
     <td class="tg-cly1">0MA, S0A, SM0, SMA</td>
+    <td class="tg-cly1">8593</td>
   </tr>
   <tr>
     <td class="tg-cly1" rowspan="2">Music</td>
@@ -172,12 +178,14 @@ MECAT is a comprehensive benchmark constructed on **large-scale data** to evalua
     <td class="tg-cly1">🟢 Basic</td>
     <td class="tg-cly1">Caption over clean Music&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</td>
     <td class="tg-cly1">0M0</td>
+    <td class="tg-cly1">2593</td>
   </tr>
   <tr>
     <td class="tg-cly1">Mixed</td>
     <td class="tg-cly1">🔴 Complex</td>
     <td class="tg-cly1">Caption over music with speech/sound interference</td>
     <td class="tg-cly1">0MA, S0A, SM0, SMA</td>
+    <td class="tg-cly1">8593</td>
   </tr>
   <tr>
     <td class="tg-cly1" rowspan="2">Sound</td>
@@ -185,12 +193,14 @@ MECAT is a comprehensive benchmark constructed on **large-scale data** to evalua
     <td class="tg-cly1">🟢 Basic</td>
     <td class="tg-cly1">Caption over general sound excluding speech and music</td>
     <td class="tg-cly1">00A</td>
+    <td class="tg-cly1">848</td>
   </tr>
   <tr>
     <td class="tg-cly1">Mixed</td>
     <td class="tg-cly1">🔴 Complex</td>
     <td class="tg-cly1">Caption over sound with speech/music interference</td>
     <td class="tg-cly1">0MA, S0A, SM0, SMA</td>
+    <td class="tg-cly1">8593</td>
   </tr>
   <tr>
     <td class="tg-yla0"><span style="font-weight:bold">Content-Unrelated</span></td>
@@ -199,6 +209,7 @@ MECAT is a comprehensive benchmark constructed on **large-scale data** to evalua
     <td class="tg-cly1">🔵 Specialized</td>
     <td class="tg-cly1">Caption over acoustic characteristic and environment</td>
     <td class="tg-cly1">000, 00A, 0M0, 0MA<br>S00, S0A, SM0, SMA</td>
+    <td class="tg-cly1">20052</td>
   </tr>
 </tbody></table>
 
@@ -211,6 +222,7 @@ MECAT is a comprehensive benchmark constructed on **large-scale data** to evalua
     <th class="tg-yla0"><span style="font-weight:bold">Level</span></th>
     <th class="tg-yla0"><span style="font-weight:bold">Description</span></th>
     <th class="tg-yla0"><span style="font-weight:bold">Data Abbreviation</span></th>
+    <th class="tg-yla0"><span style="font-weight:bold">Sample</span></th>
   </tr></thead>
 <tbody>
   <tr>
@@ -219,6 +231,7 @@ MECAT is a comprehensive benchmark constructed on **large-scale data** to evalua
     <td class="tg-cly1">🟢🟡</td>
     <td class="tg-cly1">Perceive sound types</td>
     <td class="tg-cly1">000, 00A, 0M0, 0MA, S00, S0A, SM0, SMA</td>
+    <td class="tg-cly1">20624</td>
   </tr>
   <tr>
     <td class="tg-yla0" rowspan="2"><span style="font-weight:bold">Analysis</span></td>
@@ -226,12 +239,14 @@ MECAT is a comprehensive benchmark constructed on **large-scale data** to evalua
     <td class="tg-cly1">🟢🟡🟠🔴</td>
     <td class="tg-cly1">Analyze sound characteristics</td>
     <td class="tg-cly1">000, 00A, 0M0, 0MA, S00, S0A, SM0, SMA</td>
+    <td class="tg-cly1">19767</td>
   </tr>
   <tr>
     <td class="tg-cly1">Quality_Assessment </td>
     <td class="tg-cly1">🟢🟡🟠🔴</td>
     <td class="tg-cly1">Analyze sound quality</td>
     <td class="tg-cly1">000, 00A, 0M0, 0MA, S00, S0A, SM0, SMA</td>
+    <td class="tg-cly1">18942</td>
   </tr>
   <tr>
     <td class="tg-yla0" rowspan="3"><span style="font-weight:bold">Reasoning</span></td>
@@ -239,18 +254,21 @@ MECAT is a comprehensive benchmark constructed on **large-scale data** to evalua
     <td class="tg-cly1">🟢🟡🟠🔴</td>
     <td class="tg-cly1">Reasoning acoustic environment </td>
     <td class="tg-cly1">000, 00A, 0M0, 0MA, S00, S0A, SM0, SMA</td>
+    <td class="tg-cly1">18300</td>
   </tr>
   <tr>
     <td class="tg-cly1">Inference_Judgment</td>
     <td class="tg-cly1">🟢🟡🟠🔴</td>
     <td class="tg-cly1">Cross-modal reasoning </td>
     <td class="tg-cly1">000, 00A, 0M0, 0MA, S00, S0A, SM0, SMA</td>
+    <td class="tg-cly1">19756</td>
   </tr>
   <tr>
     <td class="tg-cly1">Application_Context </td>
     <td class="tg-cly1">🟢🟡🟠🔴</td>
     <td class="tg-cly1">Semantic understanding </td>
     <td class="tg-cly1">000, 00A, 0M0, 0MA, S00, S0A, SM0, SMA</td>
+    <td class="tg-cly1">2871</td>
   </tr>
 </tbody></table>
 
@@ -764,6 +782,60 @@ python -m mecat.evaluate --prediction qa_predictions.csv --task qa --metrics fen
   - Evaluate all sub-tasks in a single inference pass using the standard method.
   - Single prediction file is sufficient as questions are task-specific.
 
+#### 7.4 Direct Data Evaluation
+
+If you have complete `predicted_data` and `reference_data`, you can directly use them for evaluation without loading from files or datasets:
+
+**Audio Captioning Task Example:**
+
+```python
+from mecat import evaluate
+
+predicted_data = [['silence']]
+
+reference_data = [['Extended silence with severe audio distortion and background noise.', 'Persistent quiet period containing heavy signal interference.', 'Continuous silence disrupted by pronounced technical artifacts.']]
+
+results = evaluate(
+    predicted_data=predicted_data, 
+    reference_data=reference_data, 
+    task='caption',
+    metrics='bleu',
+    subtask='short', 
+)
+
+print(results)
+```
+
+**Audio Question Answering Task Example:**
+
+Similarly, for QA tasks, you can also provide `predicted_data` and `reference_data` directly:
+
+```python
+from mecat import evaluate
+
+predicted_data = [['A woman speaking expressively and dog barks.']]
+
+reference_data = [['A woman speaking expressively and dog barks.']]
+
+results = evaluate(
+    predicted_data=predicted_data, 
+    reference_data=reference_data, 
+    task='qa',
+    metrics='bleu',
+    subtask='direct_perception',
+)
+
+print(results)
+```
+
+This approach is useful when:
+- You already have the predictions and references in memory
+- You want to evaluate custom data that is not part of the MECAT dataset
+- You need to quickly test evaluation metrics on specific examples
+
+**Note**: Both `predicted_data` and `reference_data` should be lists of lists, where each inner list contains the predictions or references for a single sample. For reference data, multiple references per sample are supported (as shown in the caption example above).
+
+**Important**: If you want to obtain results for different tasks (e.g., evaluating multiple caption subtasks or QA subtasks), it is recommended to use the methods described in sections 7.1-7.3, as they automatically select the appropriate keys for different tasks and provide comprehensive evaluation results across all subtasks.
 
 ## 8. Results
 ### 8.1 Audio-Captioning Task

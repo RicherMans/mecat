@@ -192,11 +192,12 @@ def expand_metrics_for_headers(metrics: List[str]) -> List[str]:
 
 
 def load_data_with_config(
-    predicted_data: Dict[str, str],
+    predicted_data: Union[Dict[str, str], List[List[str]]],
     task: Literal["caption", "qa"] = "caption",
     subtask: Optional[str] = None,
     level: Optional[str] = None,
     reference_dir: Optional[str] = None,
+    reference_data: Optional[List[List[str]]] = None,
     force_pure: bool = False,
     force_mixed: bool = False,
     metrics: Optional[List[str]] = None,
@@ -205,11 +206,12 @@ def load_data_with_config(
     Load reference data using Config form from utils.py based on task and subtask,
     and match with provided predicted_data
     Args:
-        predicted_data: Dict[str, str], the predicted data as {id: prediction}
+        predicted_data: Union[Dict[str, str], List[List[str]]], the predicted data as {id: prediction} or List of List of predictions
         task: Literal['caption', 'qa'], the task type
         subtask: Optional[str], the specific field to load (e.g., 'long', 'short', 'direct_perception')
         level: Optional[str], the level for QA task (e.g., 'basic', 'intermediate')
-        reference_dir: Optional[str], path to reference directory
+        reference_dir: Optional[str], path to reference directory [Default: None]
+        reference_data: Optional[List[List[str]]], List of List of reference strings 
         metrics: Optional[List[str]], the metrics to be used (for compatibility, not used in current implementation)
     Returns:
         Tuple: (gts, res, raw_data) in the format expected by scorers
@@ -283,69 +285,76 @@ def load_data_with_config(
         subsets = ALL_SUBSETS
 
     # Load reference data
-    if reference_dir is None:
+    if reference_data is None and reference_dir is None:
         reference_dir = os.path.join(os.path.dirname(__file__), "reference", task, "test")
 
-    # Load reference data from files based on task and subtask
-    reference_data = {}
+    if reference_data is not None:
+        # reference_data is provided, use it directly
+        assert all(isinstance(item, list) for item in predicted_data) and all(isinstance(item, list) for item in reference_data), "predicted_data and reference_data must be a List of List of strings when reference_data is provided"
+        assert len(predicted_data) == len(reference_data), "The number of predicted and reference data must be the same"
+        filtered_predicted_data = {i: predicted_data[i] for i in range(len(predicted_data))}
+        filtered_reference_data = {i: reference_data[i] for i in range(len(reference_data))}
+    else:
+        # Load reference data from files based on task and subtask
+        reference_data = {}
 
-    if task == "caption":
-        # For caption task, load data for the specified subtask
-        for subset in subsets:
-            # Default in the pacakge are .gz files
-            ref_file_gz = os.path.join(reference_dir, f"{subset}.jsonl.gz")
-            ref_file = os.path.join(reference_dir, f"{subset}.jsonl")
-            if os.path.exists(ref_file_gz):
-                file_opener = gzip.open(ref_file_gz, "rt", encoding="utf-8")
-                logger.info(ref_file_gz)
-            elif os.path.exists(ref_file):
-                file_opener = open(ref_file, "r", encoding="utf-8")
-                logger.info(ref_file)
-            else:
-                continue
-            with file_opener as f:
-                for line in f:
-                    try:
-                        line_data = json.loads(line.strip())
-                        for key, value in line_data.items():
-                            if subtask in value:
-                                reference_data[key] = value[subtask]
-                    except Exception as e:
-                        logger.warning(f"Failed to parse line in {ref_file_gz}: {e}")
-                        continue
-    else:  # QA 
-        # For QA task, load data based on category (subtask) and level
-        for subset in subsets:
-            # Default in the pacakge are .gz files
-            ref_file_gz = os.path.join(reference_dir, f"{subset}.jsonl.gz")
-            ref_file = os.path.join(reference_dir, f"{subset}.jsonl")
-            if os.path.exists(ref_file_gz):
-                file_opener = gzip.open(ref_file_gz, "rt", encoding="utf-8")
-                logger.info(ref_file_gz)
-            elif os.path.exists(ref_file):
-                file_opener = open(ref_file, "r", encoding="utf-8")
-                logger.info(ref_file)
-            else:
-                continue
-            with file_opener as f:
-                for line in f:
-                    try:
-                        line_data = json.loads(line.strip())
-                        for key, value in line_data.items():
-                            # Check if the sample matches the category and level
-                            if value.get("category") in subtask and value.get("difficulty") in level:
-                                reference_data[key] = value.get("answer", "")
-                    except Exception as e:
-                        logger.warning(f"Failed to parse line in {ref_file}: {e}")
-                        continue
+        if task == "caption":
+            # For caption task, load data for the specified subtask
+            for subset in subsets:
+                # Default in the pacakge are .gz files
+                ref_file_gz = os.path.join(reference_dir, f"{subset}.jsonl.gz")
+                ref_file = os.path.join(reference_dir, f"{subset}.jsonl")
+                if os.path.exists(ref_file_gz):
+                    file_opener = gzip.open(ref_file_gz, "rt", encoding="utf-8")
+                    logger.info(ref_file_gz)
+                elif os.path.exists(ref_file):
+                    file_opener = open(ref_file, "r", encoding="utf-8")
+                    logger.info(ref_file)
+                else:
+                    continue
+                with file_opener as f:
+                    for line in f:
+                        try:
+                            line_data = json.loads(line.strip())
+                            for key, value in line_data.items():
+                                if subtask in value:
+                                    reference_data[key] = value[subtask]
+                        except Exception as e:
+                            logger.warning(f"Failed to parse line in {ref_file_gz}: {e}")
+                            continue
+        else:  # QA 
+            # For QA task, load data based on category (subtask) and level
+            for subset in subsets:
+                # Default in the pacakge are .gz files
+                ref_file_gz = os.path.join(reference_dir, f"{subset}.jsonl.gz")
+                ref_file = os.path.join(reference_dir, f"{subset}.jsonl")
+                if os.path.exists(ref_file_gz):
+                    file_opener = gzip.open(ref_file_gz, "rt", encoding="utf-8")
+                    logger.info(ref_file_gz)
+                elif os.path.exists(ref_file):
+                    file_opener = open(ref_file, "r", encoding="utf-8")
+                    logger.info(ref_file)
+                else:
+                    continue
+                with file_opener as f:
+                    for line in f:
+                        try:
+                            line_data = json.loads(line.strip())
+                            for key, value in line_data.items():
+                                # Check if the sample matches the category and level
+                                if value.get("category") in subtask and value.get("difficulty") in level:
+                                    reference_data[key] = value.get("answer", "")
+                        except Exception as e:
+                            logger.warning(f"Failed to parse line in {ref_file}: {e}")
+                            continue
 
-    # Only keep the samples that are in both predicted and reference data
-    common_keys = set(predicted_data.keys()) & set(reference_data.keys())
+        # Only keep the samples that are in both predicted and reference data
+        common_keys = set(predicted_data.keys()) & set(reference_data.keys())
 
-    filtered_predicted_data = {k: predicted_data[k] for k in common_keys}
-    filtered_reference_data = {k: reference_data[k] for k in common_keys}
+        filtered_predicted_data = {k: predicted_data[k] for k in common_keys}
+        filtered_reference_data = {k: reference_data[k] for k in common_keys}
 
-    logger.info(f"Evaluated samples: {len(common_keys)}/{len(reference_data)}")
+        logger.info(f"Evaluated samples: {len(common_keys)}/{len(reference_data)}")
 
     # Prepare the evaluation data format
     # Since FENSE and DATE now use raw_data directly, we can always use the traditional format
@@ -520,6 +529,7 @@ def evaluate(
         Dict[str, str], 
         Dict[str, Dict], 
         List[Dict[str, str]], 
+        List[List[str]],
         Path, 
         List[Path], 
         str
@@ -554,6 +564,7 @@ def evaluate(
     ] = None,
     level: Optional[str] = None,
     reference_dir: Optional[str] = None,
+    reference_data: Optional[List[List[str]]] = None,
     batch_size: int = 32,
     device: Optional[str] = None,
     output_dir: Optional[Union[str, Path]] = None,
@@ -566,6 +577,7 @@ def evaluate(
             - Dict[str, str]: {id: prediction} dictionary
             - Dict[str, Dict]: {subtask: {id: prediction}} dictionary, keys must match valid subtasks
             - List[Dict[str, str]]: List of [{id: prediction}] dictionaries, evaluated in order: long, short, speech, music, sound, environment
+            - List[List[str]]: List of List of predictions
             - Path: Path to single prediction file
             - List[Path]: List of prediction file paths, evaluated in order: long, short, speech, music, sound, environment
             - str: Path string to single prediction file
@@ -577,6 +589,7 @@ def evaluate(
             - If None and predicted_data is Dict[str, str] or single file, evaluates all subtasks
         level: Optional[str], the level for QA task (e.g., 'basic', 'intermediate')
         reference_dir: Optional[str], path to reference directory
+        reference_data: Optional[List[List[str]]], List of List of reference strings
         batch_size: int, batch size for FENSE metric
         device: str, device for FENSE metric (e.g., 'cpu', 'cuda')
         output_dir: Optional[Union[str, Path]], if provided, save results to this directory and print to screen
@@ -690,6 +703,17 @@ def evaluate(
                 for i, file_path in enumerate(predicted_data):
                     file_data = load_prediction_file(file_path)
                     data_dict_list.append((determined_subtasks[i], file_data))
+        elif all(isinstance(item, list) for item in predicted_data):
+            # List[List[str]] format
+            if task == "caption":
+                logger.warning(f"subtask is not valid for caption task when reference_data is provided, using 'long' instead")
+                subtask = 'long'
+                data_dict_list.append((subtask, predicted_data))
+            else:  # QA task
+                logger.warning(f"subtask is not valid for qa task when reference_data is provided, using 'direct_perception' instead")
+                subtask = 'direct_perception'
+                data_dict_list.append((subtask, predicted_data))
+                
         else:
             raise TypeError("List elements must be all dictionaries or all file paths")
     elif isinstance(predicted_data, (Path, str)):
@@ -721,6 +745,12 @@ def evaluate(
         if len(predicted_data) != 1:
             should_ignore_subtask = True
             ignore_reason = f"input is List[Dict] with length {len(predicted_data)} (not 1)"
+
+    # Case 4: List[List[str]] format
+    elif isinstance(predicted_data, list) and all(isinstance(item, list) for item in predicted_data):
+        if len(predicted_data) != 1:
+            should_ignore_subtask = True
+            ignore_reason = f"input is List[List[str]] with length {len(predicted_data)} (not 1)"
     
     # Determine final subtasks to evaluate
     if subtask is not None and should_ignore_subtask:
@@ -798,6 +828,7 @@ def evaluate(
                     subtask=subtask,
                     level=level,
                     reference_dir=reference_dir,
+                    reference_data=reference_data,
                     force_pure=True,
                     metrics=metrics,
                 )
@@ -825,6 +856,7 @@ def evaluate(
                     subtask=subtask,
                     level=level,
                     reference_dir=reference_dir,
+                    reference_data=reference_data,
                     force_mixed=True,
                     metrics=metrics,
                 )
@@ -853,6 +885,7 @@ def evaluate(
                     subtask=subtask,
                     level=level,
                     reference_dir=reference_dir,
+                    reference_data=reference_data,
                     metrics=metrics,
                 )
                 group_name = matching_groups[0] if matching_groups else subtask
@@ -880,6 +913,7 @@ def evaluate(
                 subtask=subtask,
                 level=level,
                 reference_dir=reference_dir,
+                reference_data=reference_data,
                 metrics=metrics,
             )
             group_name = subtask

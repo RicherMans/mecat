@@ -710,7 +710,7 @@ def evaluate(
                 subtask = 'long'
                 data_dict_list.append((subtask, predicted_data))
             else:  # QA task
-                logger.warning(f"subtask is not valid for qa task when reference_data is provided, using 'direct_perception' instead")
+                loggern.warning(f"subtask is not valid for qa task when reference_data is provided, using 'direct_perception' instead")
                 subtask = 'direct_perception'
                 data_dict_list.append((subtask, predicted_data))
                 
@@ -750,7 +750,7 @@ def evaluate(
     elif isinstance(predicted_data, list) and all(isinstance(item, list) for item in predicted_data):
         if len(predicted_data) != 1:
             should_ignore_subtask = True
-            ignore_reason = f"input is List[List[str]] with length {len(predicted_data)} (not 1)"
+            ignore_reason = f"reference_data is provided, using {subtask} instead"
     
     # Determine final subtasks to evaluate
     if subtask is not None and should_ignore_subtask:
@@ -795,7 +795,7 @@ def evaluate(
 
     # Create mapping from subtask to data_dict for easy lookup
     subtask_to_data = {}
-    if len(data_dict_list) == 1 and data_dict_list[0][0] is None:
+    if (len(data_dict_list) == 1 and data_dict_list[0][0] is None) or (reference_data is not None):
         # Single Dict[str, str] or single file - use for all subtasks
         data_dict = data_dict_list[0][1]
         for subtask_name in subtasks:

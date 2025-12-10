@@ -389,7 +389,6 @@ def load_data_with_config(
         }
         for k, v in filtered_predicted_data.items()
     ]
-    print(gts, res, raw_data)
     return gts, res, raw_data
 
 

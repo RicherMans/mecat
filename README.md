@@ -800,7 +800,6 @@ results = evaluate(
     reference_data=reference_data, 
     task='caption',
     metrics='bleu',
-    subtask='short', 
 )
 
 print(results)

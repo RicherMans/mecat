@@ -710,7 +710,7 @@ def evaluate(
                 subtask = 'long'
                 data_dict_list.append((subtask, predicted_data))
             else:  # QA task
-                loggern.warning(f"subtask is not valid for qa task when reference_data is provided, using 'direct_perception' instead")
+                logger.warning(f"subtask is not valid for qa task when reference_data is provided, using 'direct_perception' instead")
                 subtask = 'direct_perception'
                 data_dict_list.append((subtask, predicted_data))
                 

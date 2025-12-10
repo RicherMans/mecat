@@ -292,7 +292,7 @@ def load_data_with_config(
         # reference_data is provided, use it directly
         assert all(isinstance(item, list) for item in predicted_data) and all(isinstance(item, list) for item in reference_data), "predicted_data and reference_data must be a List of List of strings when reference_data is provided"
         assert len(predicted_data) == len(reference_data), "The number of predicted and reference data must be the same"
-        filtered_predicted_data = {i: predicted_data[i] for i in range(len(predicted_data))}
+        filtered_predicted_data = {i: predicted_data[i][0] for i in range(len(predicted_data))}
         filtered_reference_data = {i: reference_data[i] for i in range(len(reference_data))}
     else:
         # Load reference data from files based on task and subtask
@@ -389,6 +389,7 @@ def load_data_with_config(
         }
         for k, v in filtered_predicted_data.items()
     ]
+    print(gts, res, raw_data)
     return gts, res, raw_data
 
 

@@ -796,7 +796,12 @@ def evaluate(
     # Create mapping from subtask to data_dict for easy lookup
     subtask_to_data = {}
     if (len(data_dict_list) == 1 and data_dict_list[0][0] is None) or (reference_data is not None):
-        # Single Dict[str, str] or single file - use for all subtasks
+        if reference_data is not None:
+            # Reference data is provided, use it only for the first subtask (caption: long; qa: direct_perception)
+            subtasks = subtasks[:1]
+        else:
+            # Single Dict[str, str] or single file - use for all subtasks
+            pass
         data_dict = data_dict_list[0][1]
         for subtask_name in subtasks:
             subtask_to_data[subtask_name] = data_dict

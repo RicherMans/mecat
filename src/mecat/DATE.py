@@ -9,6 +9,8 @@ import torch.nn as nn
 from typing import Literal
 from collections import namedtuple
 import sys
+import psutil
+import numpy as np
 
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), "src"))
 from sentence_transformers import SentenceTransformer
@@ -30,6 +32,19 @@ from sentence_transformers.util import (
 # Taken from fense (https://github.com/blmoistawinde/fense/)
 RemoteFileMetadata = namedtuple('RemoteFileMetadata',
                                 ['filename', 'url', 'checksum'])
+
+def fetch_memory_usage():
+    """
+    Log current memory usage for debugging and optimization monitoring.
+    
+    Args:
+        stage (str): Label indicating the current processing stage.
+    """
+    pid = os.getpid()
+    process = psutil.Process(pid)
+    mem_info = process.memory_info()
+    memory_mb = mem_info.rss / 1024 / 1024 / 1024
+    return f"{memory_mb:.2f} GB"
 
 def get_data_home(data_home=None):
     if data_home is None:
@@ -428,7 +443,7 @@ class RefinedSentenceTransformers(nn.Module):
         batch_size: int = 32,
         output_value: Literal[
             "input_ids", "word_embeddings", "token_embeddings", "sentence_embedding"
-        ] = "sentece_embedding",
+        ] = "sentence_embedding",
     ):
         """
         Encode sentences into embeddings with batched processing.
@@ -615,238 +630,103 @@ class DATE(nn.Module):
             "environment": {"all": 0.2150},  # Environmental sounds (x)
         }
 
-    def fetch_word_embeddings(self, batch_output: dict, batch_size: int = 32):
-        """
-        Calculate word-level embeddings and similarity matrices for TF-IDF weighting.
-
-        This method processes the batch output to extract word embeddings and compute
-        similarity matrices that will be used for TF-IDF weight calculation. It creates
-        word-to-word and word-to-document similarity matrices.
-
-        Args:
-            batch_output (dict): Output from the sentence transformer containing embeddings
-            batch_size (int): Batch size for processing (currently unused)
-
-        Returns:
-            tuple: (word_similarity, word2doc_similarity, updated_batch_output)
-                - word_similarity: Word-to-word similarity matrix
-                - word2doc_similarity: Word-to-document similarity matrix
-                - updated_batch_output: Enhanced batch output with similarity data
-        """
-        # Extract input IDs and embeddings from batch output
-        input_ids_batch = batch_output["features"]["input_ids"]  # (n_sents, seq_len)
-        embeddings_batch = batch_output["embeddings"].clone()  # (n_sents, seq_len, emb_dim)
-
-        # Ensure embeddings_batch is on CPU for storage, input_ids_batch can stay on its device
-        if embeddings_batch.device.type == "cuda":
-            embeddings_batch = embeddings_batch.cpu()
-        
-        # For indexing, we need both tensors on the same device
-        # Since embeddings_batch is now on CPU, move input_ids_batch to CPU for indexing
-        if input_ids_batch.device.type == "cuda":
-            input_ids_batch = input_ids_batch.cpu()
-
-        # Construct the embedding dictionary for unique words
-        valid_mask = input_ids_batch != 0  # Create mask for non-padding tokens
-        valid_input_ids = input_ids_batch[valid_mask]  # Flatten valid input IDs
-        valid_embeddings = embeddings_batch[valid_mask]  # Flatten corresponding embeddings
-
-        # Create dictionary mapping word IDs to their embeddings
-        embeddings_dict = {
-            int(tmp_id): {"embedding": embedding} for tmp_id, embedding in zip(valid_input_ids, valid_embeddings)
-        }
-
-        logger.info("start calculate similarity")
-
-        # Construct embeddings matrix and create mapping
-        embeddings = torch.stack([emb_dict["embedding"] for emb_dict in embeddings_dict.values()])
-        mapping_wordkey2vecidx = {key: idx for idx, key in enumerate(list(embeddings_dict.keys()))}
-
-        # Calculate word-piece similarity matrix (n_words, n_words)
-        embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=-1)
-        
-        # In CPU priority mode, keep embeddings on CPU and only move to GPU for computation
-        if self.cpu_priority and self.compute_device == "cuda":
-            embeddings = embeddings.to(self.storage_device)  # Keep on CPU
-        else:
-            embeddings = embeddings.to(self.device)
-
-        # calculateht word-piece simialrity (n_words, n_words)
-        results = []
-        with torch.no_grad():
-            for i in tqdm(range(0, embeddings.shape[0], batch_size)):
-                batch_block = embeddings[i : i + batch_size]
-                # Move batch to compute device only when needed
-                if self.cpu_priority and self.compute_device == "cuda":
-                    batch_block = batch_block.to(self.compute_device)
-                    embeddings_compute = embeddings.to(self.compute_device)
-                else:
-                    embeddings_compute = embeddings
-                
-                block_sim = torch.mm(embeddings_compute, batch_block.t())
-                results.append(block_sim.cpu())
-                
-                # Clean up GPU memory immediately
-                if self.cpu_priority and self.compute_device == "cuda":
-                    del batch_block, embeddings_compute, block_sim
-                    torch.cuda.empty_cache()
-                else:
-                    del batch_block, block_sim
-                    
-        word_similarity = torch.cat(results, dim=1)
-        
-        # Clean up GPU memory
-        if self.compute_device == "cuda":
-            torch.cuda.empty_cache()
-
-        if self.is_clamp_neg_similarity == True:
-            rescaled_word_similarity = torch.clamp(word_similarity, min=0)
-        else:
-            rescaled_word_similarity = word_similarity
-
-        # calculate the word * (n_sents*n_seq) similarity (n_words, n_sents, n_seq)
-        n_sents, n_padding_words, n_emb = embeddings_batch.shape
-        embeddings_batch = torch.nn.functional.normalize(embeddings_batch, p=2, dim=-1)
-        
-        # embeddings_batch should already be on CPU from earlier processing
-        # Keep it on CPU for storage, only move to GPU for computation when needed
-        embeddings_batch = embeddings_batch.reshape(n_sents * n_padding_words, n_emb)
-
-        # calculate the word2doc similarity
-        results = []
-        with torch.no_grad():
-            for i in tqdm(range(0, embeddings_batch.shape[0], batch_size)):
-                batch_block = embeddings_batch[i : i + batch_size]
-                # Move batch to compute device only when needed
-                if self.cpu_priority and self.compute_device == "cuda":
-                    batch_block = batch_block.to(self.compute_device)
-                    embeddings_compute = embeddings.to(self.compute_device)
-                else:
-                    embeddings_compute = embeddings
-                
-                block_sim = torch.mm(embeddings_compute, batch_block.t())
-                results.append(block_sim.cpu())
-                
-                # Clean up GPU memory immediately
-                if self.cpu_priority and self.compute_device == "cuda":
-                    del batch_block, embeddings_compute, block_sim
-                    torch.cuda.empty_cache()
-                else:
-                    del batch_block, block_sim
-                    
-        word2doc_similarity = torch.cat(results, dim=1)
-        
-        # Clean up GPU memory
-        if self.compute_device == "cuda":
-            torch.cuda.empty_cache()
-
-        if self.is_clamp_neg_similarity == True:
-            rescaled_word2doc_similarity = torch.clamp(word2doc_similarity, min=0)
-        else:
-            rescaled_word2doc_similarity = word2doc_similarity
-
-        # contruct the outputs
-        gc.collect()
-        batch_output["mapping_wordkey2vecidx"] = mapping_wordkey2vecidx
-        return rescaled_word_similarity, rescaled_word2doc_similarity, batch_output
-
     def calcualte_tf_idf_weight(
         self,
         word_similarity: torch.Tensor,
-        word2doc_similarity: torch.Tensor,
+        word2doc_similarity: None, # This argument is None in the optimized version
         batch_output: dict,
         idf_type: Literal["token", "embedding"] = "embedding",
     ):
         """
-        Calculate TF-IDF weights for word embeddings to improve text representation.
-
-        This method computes Term Frequency-Inverse Document Frequency (TF-IDF) weights
-        for each word in the corpus. The TF component is based on word similarity within
-        sentences, while the IDF component measures how unique a word is across the corpus.
+        Calculate TF-IDF weights using precomputed statistics to improve text representation.
+        
+        This method computes the final TF-IDF weights based on pre-calculated IDF sums and 
+        word similarity matrices. It supports mixed precision (FP16 storage, FP32 compute)
+        to maintain numerical stability while optimizing memory.
 
         Args:
-            word_similarity (torch.Tensor): Word-to-word similarity matrix
-            word2doc_similarity (torch.Tensor): Word-to-document similarity matrix
-            batch_output (dict): Batch output containing features and mappings
+            word_similarity (torch.Tensor or np.ndarray): Word-to-word similarity matrix
+            word2doc_similarity (None): Unused in optimized version (passed as None)
+            batch_output (dict): Batch output containing features and precomputed stats
             idf_type (str): Type of IDF calculation ('token' or 'embedding')
 
         Returns:
-            list: List of TF-IDF weight tensors for each sentence group
+            torch.Tensor: Flat tensor containing TF-IDF weights for each token (FP16)
         """
-        logger.info("calculting the idf of each word")
+        
+        # Retrieve precomputed IDF sum from batch_output
+        idf_sum = batch_output["_precomputed_idf_sum"]
+        n_sents, seq_len = batch_output["features"]["input_ids"].shape
 
-        # Create mask for non-special tokens (exclude [CLS]=101 and [SEP]=102)
-        masked_input_ids = batch_output["features"]["input_ids"].clone()
-        masked_input_ids[masked_input_ids == 101] = 0  # Remove [CLS] tokens
-        masked_input_ids[masked_input_ids == 102] = 0  # Remove [SEP] tokens
-        masked_input_ids[masked_input_ids != 0] = 1  # Convert to binary mask
+        # Calculate final IDF values using log normalization (FP32)
+        idf = torch.log((n_sents + 1) / (idf_sum + 1)) + 1
+        idf = idf.to(self.device)
 
-        n_sents, n_padding_words = masked_input_ids.shape
-
-        # Calculate IDF (Inverse Document Frequency) for each unique word
-        idf = torch.zeros(
-            [
-                word2doc_similarity.shape[0],
-            ],
-            device=masked_input_ids.device,
-        )
-        for tmp_sent_id in tqdm(range(n_sents)):
-            # Extract similarity scores for current sentence
-            tmp_idf = word2doc_similarity[:, tmp_sent_id * n_padding_words : (tmp_sent_id + 1) * n_padding_words].to(
-                idf.device
-            )
-
-            # Apply masking based on IDF calculation type
-            if idf_type == "embedding":
-                tmp_idf = tmp_idf * masked_input_ids[tmp_sent_id]
-            else:
-                tmp_idf = tmp_idf * masked_input_ids[tmp_sent_id]
-                tmp_idf = tmp_idf * (tmp_idf == 1)
-
-            # Accumulate document frequency for each word
-            tmp_idf = torch.clamp(torch.sum(tmp_idf**2, dim=1), min=0, max=1)
-            idf = idf + tmp_idf
-
-        # Calculate final IDF values using log normalization
-        idf = torch.log((n_sents + 1) / (idf + 1)) + 1
-
-        logger.info("calculting the tf-idf weight")
-        tf_idf_weights = []
+        # Calculating the tf-idf weight 
+        # Initialize weight matrix (FP16 storage on CPU)
+        flat_tfidf_weights = torch.ones((n_sents, seq_len), dtype=torch.float16, device="cpu")
         input_ids = batch_output["features"]["input_ids"].detach().cpu().numpy()
         mapping_jsonkey2sentidx = batch_output["mapping_jsonkey2sentidx"]
         mapping_wordkey2vecidx = batch_output["mapping_wordkey2vecidx"]
 
-        # Calculate TF-IDF weights for each sentence group
-        for tmp_json_key, (tmp_start, tmp_end) in tqdm(mapping_jsonkey2sentidx.items()):
-            batch_tfidf_weights = []
-            for input_id in input_ids[tmp_start:tmp_end]:
-                # Remove padding tokens
-                input_id = input_id[input_id != 0]
+        # Ensure word_similarity is in numpy format for indexing
+        if isinstance(word_similarity, torch.Tensor):
+            word_sim_cpu = word_similarity.numpy()
+        else:
+            word_sim_cpu = word_similarity
 
-                # Get word indices (exclude [CLS] and [SEP] tokens)
-                word_indices = [mapping_wordkey2vecidx[tmp_id] for tmp_id in input_id[1:-1]]
-                selected = word_similarity[word_indices][:, word_indices].to(self.device)
+        for tmp_json_key, (tmp_start, tmp_end) in tqdm(mapping_jsonkey2sentidx.items(), desc="Final TF-IDF"):
+            batch_ids = input_ids[tmp_start:tmp_end]
+            segment_weights = []
 
-                # Calculate TF (Term Frequency) based on word similarity
-                tf_weights = torch.sum(selected**2, dim=1)
+            for i, input_id in enumerate(batch_ids):
+                # Strictly match DATE0 logic: Filter out PAD(0), CLS(101), SEP(102)
+                valid_ids = input_id[(input_id != 0) & (input_id != 101) & (input_id != 102)]
+                word_indices = [mapping_wordkey2vecidx[tmp_id] for tmp_id in valid_ids if tmp_id in mapping_wordkey2vecidx]
+                
+                # DATE0 logic: Use FP32 for intermediate calculations to preserve precision
+                # Length + 2 accommodates [CLS] and [SEP]
+                tmp_tf_idf = torch.ones(len(word_indices) + 2, device=self.device, dtype=torch.float32)
 
-                # Get IDF weights for current words
-                idf_weights = idf[word_indices].to(self.device)
+                if word_indices:
+                    # Read similarity from FP16 storage, convert to FP32 for computation
+                    selected_slice = word_sim_cpu[np.ix_(word_indices, word_indices)]
+                    selected = torch.from_numpy(selected_slice).to(self.device, dtype=torch.float32)
+                    
+                    # Calculate TF (Term Frequency)
+                    tf_weights = torch.sum(selected**2, dim=1)
+                    idf_weights = idf[word_indices]
+                    
+                    # Fill middle section (corresponding to actual words)
+                    tmp_tf_idf[1:-1] = tf_weights * idf_weights
+                    
+                    # Normalize weights
+                    mean_val = tmp_tf_idf[1:-1].mean()
+                    if mean_val > 1e-9:
+                         tmp_tf_idf[1:-1] = tmp_tf_idf[1:-1] / mean_val
 
-                # Combine TF and IDF weights
-                tmp_tf_idf = torch.ones([tf_weights.shape[0] + 2], device=self.device)
-                tmp_tf_idf[1:-1] = tf_weights * idf_weights
+                    # Set weights for special tokens ([CLS] max, [SEP] min)
+                    tmp_tf_idf[0] = torch.max(tmp_tf_idf)
+                    tmp_tf_idf[-1] = torch.min(tmp_tf_idf)
 
-                # Normalize TF-IDF weights
-                tmp_tf_idf[1:-1] = tmp_tf_idf[1:-1] / tmp_tf_idf[1:-1].mean()
+                # Map calculated weights back to sequence length
+                padded_tfidf = torch.ones(seq_len, device=self.device, dtype=torch.float32)
+                
+                # Determine actual length of non-padding tokens
+                actual_len = len(input_id[input_id != 0])
+                # Truncate or pad safely to avoid index errors
+                safe_len = min(len(tmp_tf_idf), actual_len)
+                if safe_len > 0:
+                    padded_tfidf[:safe_len] = tmp_tf_idf[:safe_len]
 
-                # Set special token weights ([CLS] gets max weight, [SEP] gets min weight)
-                tmp_tf_idf[0] = torch.max(tmp_tf_idf)
-                tmp_tf_idf[-1] = torch.min(tmp_tf_idf)
-
-                batch_tfidf_weights.append(tmp_tf_idf)
-            tf_idf_weights.append(batch_tfidf_weights)
-        return tf_idf_weights
+                segment_weights.append(padded_tfidf)
+            
+            if segment_weights:
+                # Convert back to FP16 and store in CPU memory
+                segment_stack = torch.stack(segment_weights).to("cpu", dtype=torch.float16)
+                flat_tfidf_weights[tmp_start:tmp_end] = segment_stack
+                
+        return flat_tfidf_weights
 
     def calculate_penalty(self, batch_output: dict, batch_size: int = 32):
         """
@@ -868,6 +748,110 @@ class DATE(nn.Module):
 
         return penalities
 
+    def fetch_word_embeddings(self, input_ids_all: torch.Tensor):
+        """
+        Calculate word similarity and IDF statistics using optimized static embeddings.
+        
+        This method strictly aligns with the original logic by using static embeddings from the 
+        input layer (rather than transformer outputs) to calculate similarity and IDF stats.
+        It significantly reduces memory usage by processing unique tokens only.
+
+        Args:
+            input_ids_all (torch.Tensor): Tensor containing input IDs for all sentences.
+
+        Returns:
+            tuple: (word_sim, idf_accumulator, unique_id_map)
+                - word_sim: Word-to-word similarity matrix
+                - idf_accumulator: Accumulated IDF statistics
+                - unique_id_map: Mapping from token ID to index in similarity matrix
+        """
+        
+        # 1. Get Unique Token IDs
+        unique_input_ids = torch.unique(input_ids_all)
+        # Filter out special tokens
+        valid_mask = (unique_input_ids != 0) & (unique_input_ids != 101) & (unique_input_ids != 102)
+        unique_input_ids = unique_input_ids[valid_mask]
+        
+        logger.info(f"Unique tokens to process: {len(unique_input_ids)}")
+
+        # 2. Calculate Static Embeddings for unique tokens only
+        # Key Correction: The original logic uses static embeddings from the input layer,
+        # not the transformer output. This is faster and saves memory.
+        unique_embeddings_list = []
+        process_batch_size = 4096 
+        
+        with torch.no_grad():
+            for i in range(0, len(unique_input_ids), process_batch_size):
+                batch_ids = unique_input_ids[i : i + process_batch_size].to(self.device)
+                
+                # Directly access the Embedding layer, skipping the Transformer
+                emb = self.model.auto_model.embeddings.word_embeddings(batch_ids)
+                unique_embeddings_list.append(emb.cpu())
+        
+        if not unique_embeddings_list:
+             return None, None, {}
+
+        unique_embeddings = torch.cat(unique_embeddings_list, dim=0)
+        unique_id_map = {uid.item(): idx for idx, uid in enumerate(unique_input_ids)}
+        
+        # 3. Calculate Word-Word Similarity Matrix (FP16 is sufficient and aligns with original)
+        unique_embeddings = unique_embeddings.to(self.device, dtype=torch.float16)
+        unique_embeddings = torch.nn.functional.normalize(unique_embeddings, p=2, dim=-1)
+        
+        n_words = len(unique_input_ids)
+        word_sim = torch.zeros((n_words, n_words), dtype=torch.float16, device='cpu')
+        
+        with torch.no_grad():
+            for i in range(0, n_words, 1024):
+                end_i = min(i + 1024, n_words)
+                block = torch.mm(unique_embeddings[i:end_i], unique_embeddings.t())
+                if self.is_clamp_neg_similarity:
+                    block = torch.clamp(block, min=0)
+                word_sim[i:end_i] = block.cpu()
+        
+        # 4. Calculate IDF Stats (Streaming + Static Embeddings)
+        # Use FP32 for IDF accumulator to ensure precision alignment
+        idf_accumulator = torch.zeros(n_words, dtype=torch.float32, device=self.device)
+        
+        # Build Lookup Table (FP16)
+        vocab_size = self.model.sbert.tokenizer.vocab_size
+        full_emb_table = torch.zeros((vocab_size, unique_embeddings.shape[1]), dtype=torch.float16, device=self.device)
+        
+        indices = unique_input_ids.long().to(self.device)
+        full_emb_table.index_copy_(0, indices, unique_embeddings)
+        
+        idf_batch_size = 256
+        n_sents = len(input_ids_all)
+        
+        for i in tqdm(range(0, n_sents, idf_batch_size), desc="IDF Stream"):
+            end_i = min(i + idf_batch_size, n_sents)
+            batch_ids = input_ids_all[i:end_i].to(self.device).long()
+            
+            # Lookup Static Embeddings from table
+            batch_embs = torch.nn.functional.embedding(batch_ids, full_emb_table)
+            
+            # Mask special tokens (keep FP16)
+            batch_mask = (batch_ids != 0) & (batch_ids != 101) & (batch_ids != 102)
+            batch_mask = batch_mask.unsqueeze(-1).to(dtype=batch_embs.dtype)
+            
+            batch_embs = batch_embs * batch_mask
+            
+            # Calculate similarity (FP16)
+            flat_input = batch_embs.reshape(-1, unique_embeddings.shape[1])
+            sim_flat = torch.mm(unique_embeddings, flat_input.t())
+            
+            sim_3d = sim_flat.reshape(n_words, end_i - i, -1)
+            
+            sim_sq = sim_3d.pow(2)
+            doc_scores = torch.sum(sim_sq, dim=2)
+            doc_scores = torch.clamp(doc_scores, min=0, max=1.0)
+            
+            # Accumulate scores (Convert to FP32)
+            idf_accumulator += torch.sum(doc_scores.float(), dim=1)
+            
+        del full_emb_table, unique_embeddings
+        return word_sim, idf_accumulator, unique_id_map
+
     def update_word_embeddings(
         self,
         json_data: dict,
@@ -878,11 +862,11 @@ class DATE(nn.Module):
         batch_size: int = 32,
     ):
         """
-        Generate and update word embeddings with optional TF-IDF weighting.
+        Generates only TF-IDF weights, avoiding full Word Embedding storage.
 
-        This method processes input data to generate word-level embeddings and optionally
-        applies TF-IDF weighting for improved representation. For FENSE mode, it skips
-        the TF-IDF calculation to optimize performance.
+        This method processes input data to generate TF-IDF weights without keeping the 
+        entire word embedding matrix in memory. It uses the `fetch_word_embeddings`
+        routine to calculate necessary statistics efficiently.
 
         Args:
             json_data (dict): Input data containing text samples
@@ -893,67 +877,103 @@ class DATE(nn.Module):
             batch_size (int): Batch size for processing
 
         Returns:
-            dict: Enhanced batch output with embeddings and metadata
+            dict: Enhanced batch output with TF-IDF weights and metadata
         """
         all_sentences = []
         mapping_jsonkey2sentidx = {}
-
-        # Extract all sentences from the input data
         start_idx = 0
         sorted_keys = sorted(json_data.keys())
+        
         for tmp_key in sorted_keys:
             tmp_value = json_data[tmp_key]
-
-            # Ensure field value is a list
             if type(tmp_value[subtask]) == str:
                 tmp_value[subtask] = [tmp_value[subtask]]
-
-            # Select sentences based on n_sents parameter
             sentences = tmp_value[subtask] if n_sents is None else [tmp_value[subtask][-1]]
             all_sentences.extend(sentences)
-
-            # Track sentence indices for each key
             mapping_jsonkey2sentidx[tmp_key] = (start_idx, start_idx + len(sentences))
             start_idx = start_idx + len(sentences)
 
-        # Generate word embeddings
-        logger.info("calculate the word embeddings")
-        batch_output = self.model.encode_sentences(all_sentences, batch_size=batch_size, output_value="word_embeddings")
+        # Tokenizing all sentences (CPU)...
+        # 1. Tokenize only, do not Encode. Store results on CPU.
+        # encode_sentences with output_value="input_ids" is very fast.
+        batch_output = self.model.encode_sentences(all_sentences, batch_size=batch_size, output_value="input_ids")
         batch_output["all_sentences"] = all_sentences
         batch_output["mapping_jsonkey2sentidx"] = mapping_jsonkey2sentidx
 
-        # For FENSE mode, skip similarity and TF-IDF calculations for efficiency
         if self.return_type == "fense" or not tf_idf_weighted:
+            # Return directly if weighting is not needed
             return batch_output
 
-        # For DATE mode, perform full calculations including TF-IDF weighting
-        # Calculate word similarity matrices
-        word_sim, word2doc_sim, batch_output = self.fetch_word_embeddings(batch_output)
-
-        # Calculate TF-IDF weights
-        tf_idf_weights = self.calcualte_tf_idf_weight(word_sim, word2doc_sim, batch_output)
-
-        # Apply TF-IDF weights to word embeddings
-        embeddings_batch = batch_output["embeddings"].clone()
-
-        for (
-            tmp_tf_idf,
-            tmp_key,
-        ) in zip(tf_idf_weights, mapping_jsonkey2sentidx):
-            tmp_start, tmp_end = mapping_jsonkey2sentidx[tmp_key]
-            for tmp_sent_id in range(len(tmp_tf_idf)):
-                # Apply TF-IDF weights element-wise to embeddings
-                # Ensure TF-IDF weights are on the same device as embeddings
-                tf_idf_weights_device = tmp_tf_idf[tmp_sent_id].to(embeddings_batch.device)
-                embeddings_batch[tmp_start + tmp_sent_id][0 : len(tmp_tf_idf[tmp_sent_id]), :] *= tf_idf_weights_device.unsqueeze(1)
+        input_ids = batch_output["features"]["input_ids"].cpu() # CPU Tensor
         
-        # Move embeddings back to storage device (CPU) after processing
-        if self.cpu_priority and self.compute_device == "cuda":
-            embeddings_batch = embeddings_batch.to(self.storage_device)
-
-        batch_output["features"]["inputs_embeds"] = embeddings_batch
+        # 2. Calculate auxiliary statistics (Low Memory)
+        word_sim, idf_sum, unique_id_map = self.fetch_word_embeddings(input_ids)
+        
+        # 3. Calculate TF-IDF weights (CPU)
+        # Convert idf_sum to IDF vector
+        n_docs = len(all_sentences)
+        idf_vec = torch.log((n_docs + 1) / (idf_sum + 1)) + 1
+        idf_vec = idf_vec.cpu() # (V,)
+        
+        # Calculating final TF-IDF weights matrix...
+        # Result matrix: (N, L) float16, minimal memory usage (e.g. 50k * 64 * 2B = 6.4MB)
+        tf_idf_weights = torch.ones_like(input_ids, dtype=torch.float16)
+        
+        word_sim_np = word_sim.numpy() # (V, V)
+        idf_np = idf_vec.numpy()
+        
+        # Iterate to calculate weights for each sentence
+        # Bottleneck is random access to word_sim_np
+        
+        for i in tqdm(range(len(input_ids)), desc="TF-IDF Weights"):
+            row_ids = input_ids[i].numpy()
+            
+            valid_indices = []
+            pos_in_seq = []
+            
+            for j, tid in enumerate(row_ids):
+                if tid != 0 and tid != 101 and tid != 102 and tid in unique_id_map:
+                    valid_indices.append(unique_id_map[tid])
+                    pos_in_seq.append(j)
+            
+            if not valid_indices:
+                continue
+                
+            sub_sim = word_sim_np[np.ix_(valid_indices, valid_indices)]
+            sub_idf = idf_np[valid_indices]
+            
+            tf = np.sum(sub_sim**2, axis=1)
+            weights = tf * sub_idf
+            
+            mean_val = np.mean(weights)
+            if mean_val > 1e-9:
+                weights = weights / mean_val
+            
+            current_weights = torch.tensor(weights, dtype=torch.float16)
+            tf_idf_weights[i, pos_in_seq] = current_weights
+            
+            if len(weights) > 0:
+                max_w = weights.max()
+                min_w = weights.min()
+                
+                # CLS Token logic
+                if row_ids[0] == 101:
+                    # Fix: Explicitly cast to float
+                    tf_idf_weights[i, 0] = float(max_w)
+                    
+                # SEP Token logic
+                sep_idx = np.where(row_ids == 102)[0]
+                if len(sep_idx) > 0:
+                    # Fix: Explicitly cast to float
+                    tf_idf_weights[i, sep_idx[0]] = float(min_w)
+                    
+        batch_output["tf_idf_weights"] = tf_idf_weights
+        
+        del word_sim, idf_sum, unique_id_map
+        gc.collect()
+        
         return batch_output
-
+        
     def update_sentence_embeddings(
         self,
         batch_output,
@@ -962,14 +982,14 @@ class DATE(nn.Module):
         batch_size: int = 32,
     ):
         """
-        Generate sentence-level embeddings from word embeddings with penalty application.
+        Restores TF-IDF weighting at the Input layer to ensure consistency while keeping memory low.
 
-        This method converts word-level embeddings to sentence-level representations
-        and applies error penalties. It handles different input formats for FENSE
-        and DATE evaluation modes.
+        This method generates sentence embeddings. If in DATE mode, it applies the 
+        pre-calculated TF-IDF weights directly to the input embeddings before passing 
+        them through the Transformer, matching the mathematical logic of the original version.
 
         Args:
-            batch_output: Batch output containing word embeddings and features
+            batch_output: Batch output containing TF-IDF weights and input IDs
             normalize_embeddings (bool): Whether to normalize sentence embeddings
             return_type (str): Evaluation mode ('fense' or 'date')
             batch_size (int): Batch size for processing
@@ -979,53 +999,114 @@ class DATE(nn.Module):
                 - sentence_embeddings: Normalized sentence-level embeddings
                 - penalties: Error penalty scores for each sentence
         """
-        # Select appropriate features based on evaluation mode
-        if return_type == "fense":
-            # For FENSE, exclude TF-IDF weighted embeddings
-            kwargs = {k: batch_output["features"][k] for k in batch_output["features"].keys() if k != "inputs_embeds"}
-        else:
-            # For DATE, exclude original input_ids to use TF-IDF weighted embeddings
-            kwargs = {k: batch_output["features"][k] for k in batch_output["features"].keys() if k != "input_ids"}
-
-        # Generate sentence embeddings in batches
-        embeddings = []
+        all_sentences = batch_output["all_sentences"]
+        n_samples = len(all_sentences)
+        
+        # Pre-determine output dimension
         with torch.no_grad():
-            for i in range(0, kwargs["attention_mask"].shape[0], batch_size):
-                batch_block_kwargs = {key: value[i : i + batch_size] for key, value in kwargs.items()}
-                batch_output_sents_block = self.model.encode_features(
-                    batch_block_kwargs, output_value="sentence_embedding"
-                )
-                embeddings.append(batch_output_sents_block["embeddings"])
-                del batch_output_sents_block
+            dummy_out = self.model.encode_sentences(all_sentences[0:1], batch_size=1)
+            embed_dim = dummy_out["embeddings"].shape[-1]
+        
+        # Result Tensor (CPU)
+        final_embeddings = torch.zeros((n_samples, embed_dim), dtype=torch.float32, device="cpu")
+        
+        # Retrieve precomputed weights (CPU)
+        tf_idf_weights = batch_output.get("tf_idf_weights", None) # (N, L)
+        input_ids_all = batch_output["features"]["input_ids"]     # (N, L)
+        attention_mask_all = batch_output["features"]["attention_mask"]
+        
+        # Ensure token_type_ids exists (Required by BERT)
+        token_type_ids_all = batch_output["features"].get("token_type_ids", None)
+        
+        for i in tqdm(range(0, n_samples, batch_size), desc="Sent Embeddings"):
+            end_i = min(i + batch_size, n_samples)
+            
+            # 1. Prepare Batch Data (Move to GPU)
+            b_input_ids = input_ids_all[i:end_i].to(self.device)
+            b_mask = attention_mask_all[i:end_i].to(self.device)
+            
+            batch_inputs = {
+                "input_ids": b_input_ids, 
+                "attention_mask": b_mask
+            }
+            if token_type_ids_all is not None:
+                batch_inputs["token_type_ids"] = token_type_ids_all[i:end_i].to(self.device)
+            
+            with torch.no_grad():
+                # 2. If DATE mode and weights exist: Apply weights BEFORE BERT!
+                if return_type == "date" and tf_idf_weights is not None:
+                    # A. Get Static Word Embeddings (Input Layer)
+                    # Note: self.model.auto_model is the huggingface BertModel
+                    word_embeddings = self.model.auto_model.embeddings.word_embeddings(b_input_ids)
+                    
+                    # B. Get weights and broadcast
+                    b_weights = tf_idf_weights[i:end_i].to(self.device) # (B, L)
+                    # Ensure consistent types (FP16/FP32)
+                    if b_weights.dtype != word_embeddings.dtype:
+                        b_weights = b_weights.to(dtype=word_embeddings.dtype)
+                    
+                    # (B, L, D) * (B, L, 1)
+                    inputs_embeds = word_embeddings * b_weights.unsqueeze(-1)
+                    
+                    # C. Construct new input dict, replacing input_ids with inputs_embeds
+                    # SBERT/BERT will prioritize inputs_embeds if present
+                    batch_inputs["inputs_embeds"] = inputs_embeds
+                    # Delete input_ids to be safe (though usually not required)
+                    del batch_inputs["input_ids"]
+                
+                # 3. Forward Pass (BERT)
+                # In DATE mode, weighted embeddings are passed -> Transformer -> Contextual Output
+                # This reconstructs the mathematical logic of Version 1.
+                out_features = self.model.sbert.forward(batch_inputs)
+                
+                # 4. Extract Sentence Embedding
+                # Note: RefinedSentenceTransformers might perform truncation, but here we call sbert.forward directly.
+                # We need to extract sentence_embedding.
+                # If the sbert model includes a Pooling layer, out_features['sentence_embedding'] should exist.
+                
+                if "sentence_embedding" in out_features:
+                    batch_sent_emb = out_features["sentence_embedding"]
+                else:
+                    # If no Pooling layer output, token_embeddings are usually (B, L, D)
+                    # Perform manual Mean Pooling (masked)
+                    token_embeddings = out_features["token_embeddings"]
+                    input_mask_expanded = b_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+                    sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1)
+                    sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+                    batch_sent_emb = sum_embeddings / sum_mask
+                
+                # 5. Store Results
+                final_embeddings[i:end_i] = batch_sent_emb.cpu()
+                
+            del batch_inputs, out_features
+            if self.device == "cuda":
                 torch.cuda.empty_cache()
-        embeddings = torch.cat(embeddings, dim=0)
 
-        # Calculate error penalties for all sentences
-        penalities = self.calculate_penalty(batch_output)
+        # Follow-up Penalty and Reshape logic remains unchanged
+        penalities = self.calculate_penalty(batch_output, batch_size=batch_size)
 
-        # Reshape embeddings and penalties based on data structure
         mapping_jsonkey2sentidx = batch_output["mapping_jsonkey2sentidx"]
-        for tmp_key, (tmp_start, tmp_end) in mapping_jsonkey2sentidx.items():
-            n_choices_in_one_key = tmp_end - tmp_start
-            break
+        first_key = next(iter(mapping_jsonkey2sentidx))
+        n_choices_in_one_key = mapping_jsonkey2sentidx[first_key][1] - mapping_jsonkey2sentidx[first_key][0]
 
-        n_sents, n_embs = embeddings.shape
-        embeddings = embeddings.reshape(n_sents // n_choices_in_one_key, n_choices_in_one_key, n_embs)
-        penalities = penalities.reshape(n_sents // n_choices_in_one_key, n_choices_in_one_key)
-
-        # Normalize embeddings if requested
-        if normalize_embeddings:
-            embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=-1)
-
-        # Move to target device - use CPU priority strategy
-        if self.cpu_priority and self.compute_device == "cuda":
-            embeddings = embeddings.to(self.storage_device)  # Keep on CPU
-            penalities = penalities.to(self.storage_device)  # Keep on CPU
+        n_sents, n_embs = final_embeddings.shape
+        if n_sents % n_choices_in_one_key == 0:
+            final_embeddings = final_embeddings.reshape(n_sents // n_choices_in_one_key, n_choices_in_one_key, n_embs)
+            penalities = penalities.reshape(n_sents // n_choices_in_one_key, n_choices_in_one_key)
         else:
-            embeddings = embeddings.to(self.device)
-            penalities = penalities.to(self.device)
+             logger.warning(f"Shape mismatch: {n_sents} sents vs {n_choices_in_one_key} choices. Skipping reshape.")
 
-        return embeddings, penalities
+        if normalize_embeddings:
+            final_embeddings = torch.nn.functional.normalize(final_embeddings, p=2, dim=-1)
+
+        if self.cpu_priority and self.compute_device == "cuda":
+            final_embeddings = final_embeddings.to(self.storage_device)
+            penalities = penalities.to(self.storage_device)
+        else:
+            final_embeddings = final_embeddings.to(self.device)
+            penalities = penalities.to(self.device)
+            
+        return final_embeddings, penalities
 
     def forward(
         self,
@@ -1044,8 +1125,8 @@ class DATE(nn.Module):
         This method performs the complete DATE evaluation process, including:
         1. Data preprocessing and alignment
         2. Embedding generation with optional TF-IDF weighting
-        3. Similarity calculation
-        4. Discrimination calculation (for DATE mode)
+        3. Similarity calculation (FP32)
+        4. Discrimination calculation (Optimized Batched & Vectorized)
         5. Final score computation
 
         Args:
@@ -1056,14 +1137,14 @@ class DATE(nn.Module):
             save_path (str): Path to save embeddings (optional)
             dataframe (pd.DataFrame): DataFrame to store detailed results
             field_type (str): Type of field being evaluated
+            batch_size (int): Batch size for processing
 
         Returns:
             tuple: (evaluation_results, updated_dataframe)
                 - evaluation_results: Dictionary containing scores
                 - updated_dataframe: Enhanced dataframe with results
         """
-        # Extract subtask from group_name for delta calculation
-        # Map group_name back to subtask for subset_data_delta lookup
+        # 1. Delta Setup (Strictly match DATE0.py logic)
         group_to_subtask_mapping = {
             "content_long": "long",
             "content_short": "short",
@@ -1077,17 +1158,14 @@ class DATE(nn.Module):
         }
         subtask_for_delta = group_to_subtask_mapping.get(group_name, "long")
         
-        # Set default delta value
         if delta is None:
-            # Get delta from subset_data_delta, which is a nested dict
             subtask_delta_dict = self.subset_data_delta.get(subtask_for_delta, {"all": 0.2})
-            # Use "all" as default key, or first available key
             if "all" in subtask_delta_dict:
                 delta = subtask_delta_dict["all"]
             else:
                 delta = list(subtask_delta_dict.values())[0] if subtask_delta_dict else 0.2
 
-        # Remove validation samples that don't have corresponding references
+        # 2. Data Cleaning
         removed_keys = []
         for tmp_key in val_data:
             if tmp_key not in ref_data:
@@ -1095,115 +1173,154 @@ class DATE(nn.Module):
         for tmp_key in removed_keys:
             del val_data[tmp_key]
 
+        # 3. Logging
         logger.info(f"Processing {len(ref_data)} reference items and {len(val_data)} validation items")
         logger.info(f"start processing {group_name} (subtask: {subtask_for_delta}): {len(val_data)}")
 
-        # Determine whether to use TF-IDF weighting based on evaluation mode
         tf_idf_weighted = True if self.return_type != "fense" else False
 
-        # Process reference data to generate embeddings
+        # 4. Process Reference Embeddings
+        logger.info(f"Processing reference data (current memory: {fetch_memory_usage()})")
         batch_output = self.update_word_embeddings(
             ref_data, subtask_for_delta, n_sents=None, tf_idf_weighted=tf_idf_weighted, idf_type="embedding", batch_size=batch_size
         )
         embeddings_ref, penalties_ref = self.update_sentence_embeddings(batch_output, return_type=self.return_type, batch_size=batch_size)
 
-        # Process validation data to generate embeddings
+        # 5. Process Validation Embeddings
+        logger.info(f"Processing predicted data (current memory: {fetch_memory_usage()})")
         batch_output_val = self.update_word_embeddings(
             val_data, subtask_for_delta, n_sents=1, tf_idf_weighted=tf_idf_weighted, idf_type="embedding", batch_size=batch_size
         )
         embeddings_val, penalties_val = self.update_sentence_embeddings(batch_output_val, return_type=self.return_type, batch_size=batch_size)
         embeddings_val = embeddings_val.squeeze(1)
 
-        # Save embeddings if path is provided
+        logger.info(f"Calculating metric (current memory: {fetch_memory_usage()})")
+        # 6. Prepare Centroid (Ref Mean) - Optimization from V2
+        if embeddings_ref.dim() == 3:
+            ref_mean = embeddings_ref.mean(dim=1)
+        else:
+            ref_mean = embeddings_ref
+        
+        # Move to device for calculation
+        if self.device == "cuda":
+            ref_mean = ref_mean.to(self.device)
+            embeddings_val = embeddings_val.to(self.device)
+            penalties_val = penalties_val.to(self.device)
+
+        # 7. Save Embeddings
         if save_path is not None:
             os.makedirs(save_path, exist_ok=True)
             save_name = "fense" if self.return_type == "fense" else "date"
             torch.save(embeddings_ref.detach().cpu(), f"{save_path}/embedding-{save_name}-{group_name}-ref.pt")
             torch.save(embeddings_val.detach().cpu(), f"{save_path}/embedding-{save_name}-{group_name}-val.pt")
 
-        # Calculate similarity scores between validation and reference embeddings
-        scores = []
-        for tmp_idx in tqdm(range(embeddings_ref.shape[1])):
-            tmp_scores = embeddings_val @ embeddings_ref[:, tmp_idx, :].T
-            # Ensure penalties_val is on the same device as tmp_scores
-            penalties_val_device = penalties_val.to(tmp_scores.device)
-            scores.append(tmp_scores.squeeze() * penalties_val_device)
-        torch.cuda.empty_cache()
+        # 8. Calculate Similarity (FP32)
+        emb_val_fp32 = embeddings_val.float()
+        ref_mean_fp32 = ref_mean.float()
+        penalties_fp32 = penalties_val.float().squeeze()
 
-        scores = torch.stack(scores)
-        if scores.ndim == 3:
-            scores = scores.mean(dim=0)
+        # Diagonal Similarity: Self-Similarity (Vectorized)
+        diag_sim = (emb_val_fp32 * ref_mean_fp32).sum(dim=1) * penalties_fp32
+        
+        # Keep similarity as a vector for later per-sample DATE calculation
+        similarity_vec = diag_sim 
+        similarity_per_sample = similarity_vec.detach().cpu().numpy()
 
-        # Extract diagonal similarity scores (self-similarity)
-        similarity = torch.diag(scores).to(self.device)
-
-        # Branch evaluation based on return type
         if self.return_type == "fense":
-            # FENSE mode: return only similarity scores
-            output = {"field_type": field_type, "similarity": round(similarity.mean().item(), 4)}
-
-            # Store results in dataframe if provided
+            output = {"field_type": field_type, "similarity": round(similarity_vec.mean().item(), 4)}
             if dataframe is not None:
                 sorted_keys = sorted(list(ref_data.keys()))
                 for tmp_idx, tmp_key in enumerate(sorted_keys):
-                    tmp_item = [tmp_key, field_type, 0, similarity[tmp_idx].item(), None, None]
-                    dataframe.loc[len(dataframe)] = tmp_item
-
-            return output, dataframe
-        else:
-            # DATE mode: calculate both similarity and discrimination
-            ref_keys = list(ref_data.keys())
-            logger.info(f"Scores shape: {scores.shape}")
-            delta = delta #* 6  # Scale delta parameter
-            rank = torch.zeros(len(ref_data), device=self.device)
-
-            # Calculate discrimination scores for each reference
-            for tmp_idx, tmp_ref_key in tqdm(enumerate(ref_keys), desc="calculate the discrimination"):
-                # Count samples with scores greater than current + delta/2
-                count_ge = torch.sum(scores[tmp_idx] > scores[tmp_idx][tmp_idx] + delta / 2).item()
-                # Count samples with scores within delta range
-                count_eq = torch.sum(
-                    (scores[tmp_idx] <= scores[tmp_idx][tmp_idx] + delta / 2)
-                    & (scores[tmp_idx] >= scores[tmp_idx][tmp_idx] - delta / 2)
-                ).item()
-                # Calculate rank-based discrimination score
-                rank[tmp_idx] = 1 - (count_ge + count_eq) / len(ref_data)
-
-            discrimination = rank
-
-            # Calculate the DATE score (harmonic mean of similarity and discrimination)
-            DATE_score = 2 * similarity * discrimination / (similarity + discrimination)
-
-            # Convert to numpy for output
-            similarity = similarity.detach().cpu().numpy()
-            discrimination = discrimination.detach().cpu().numpy()
-            DATE_score = DATE_score.detach().cpu().numpy()
-
-            # Store results in dataframe if provided
-            if dataframe is not None:
-                sorted_keys = sorted(list(ref_data.keys()))
-                for tmp_idx, tmp_key in enumerate(sorted_keys):
-                    tmp_item = [
-                        tmp_key,
-                        field_type,
-                        delta / 2,
-                        similarity[tmp_idx],
-                        discrimination[tmp_idx],
-                        DATE_score[tmp_idx],
-                    ]
-                    dataframe.loc[len(dataframe)] = tmp_item
-
-            # Prepare output with all evaluation metrics
-            output = {
-                "field_type": field_type,
-                "delta": delta / 2,
-                "similarity": round(similarity.mean(), 4),
-                "discrimination": round(discrimination.mean(), 4),
-                "date": round(DATE_score.mean(), 4),
-            }
-
+                    dataframe.loc[len(dataframe)] = [tmp_key, field_type, 0, similarity_per_sample[tmp_idx], None, None]
             return output, dataframe
 
+        logger.info(f"Calculating metric (part-2) (current memory: {fetch_memory_usage()})")
+        # --- DISCRIMINATION CALCULATION ---
+        n_samples = len(ref_data)
+        rank = torch.zeros(n_samples, device=self.device, dtype=torch.float32)
+        calc_batch_size = 1024 
+        
+        # Pre-prepare tensors
+        diag_sim_device = diag_sim.to(self.device)
+        ref_mean_t = ref_mean.float().t() # (Dim, N_samples)
+        
+        # Batched processing over Candidates
+        for i in range(0, n_samples, calc_batch_size):
+            end_i = min(i + calc_batch_size, n_samples)
+            
+            # 1. Calculate Row of Similarity Matrix: Batch_Val vs All_Ref_Means
+            batch_val = embeddings_val[i:end_i].float()
+            sim_matrix_batch = torch.mm(batch_val, ref_mean_t)
+            
+            # 2. Apply Penalty (Candidate-wise)
+            batch_penalties = penalties_val[i:end_i].float()
+            sim_matrix_batch = sim_matrix_batch * batch_penalties
+            
+            # 3. Calculate Rank
+            batch_self_scores = diag_sim_device[i:end_i].unsqueeze(1)
+            
+            threshold_ge = batch_self_scores + delta / 2
+            threshold_lower = batch_self_scores - delta / 2
+            
+            count_ge = (sim_matrix_batch > threshold_ge).sum(dim=1).float()
+            is_le_upper = sim_matrix_batch <= threshold_ge
+            is_ge_lower = sim_matrix_batch >= threshold_lower
+            count_eq = (is_le_upper & is_ge_lower).sum(dim=1).float()
+            
+            # Rank formula matching DATE0 logic
+            batch_rank = 1 - (count_ge + count_eq) / n_samples
+            rank[i:end_i] = batch_rank
+            
+            del sim_matrix_batch, batch_val, batch_penalties
+            
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+
+        # --- KEY FIX HERE: LOGIC ALIGNMENT WITH VERSION 1 ---
+        # Instead of calculating DATE on the scalar means (V2 logic),
+        # we calculate DATE on the vectors first (V1 logic).
+        
+        # Ensure discrimination rank is on the same device
+        rank_vec = rank.to(similarity_vec.device)
+        
+        # Calculate Per-Sample DATE Score
+        # Formula: 2 * Sim * Disc / (Sim + Disc)
+        date_vec = 2 * similarity_vec * rank_vec / (similarity_vec + rank_vec + 1e-8)
+        
+        # Now take the mean of the vector (replicates V1 behavior)
+        similarity_score = similarity_vec.mean().item()
+        discrimination_score = rank_vec.mean().item()
+        DATE_score = date_vec.mean().item()
+
+        output = {
+            "field_type": field_type,
+            "delta": delta / 2,
+            "similarity": round(similarity_score, 4),
+            "discrimination": round(discrimination_score, 4),
+            "date": round(DATE_score, 4), # Corrected logic
+        }
+        
+        if dataframe is not None:
+            sorted_keys = sorted(list(ref_data.keys()))
+            rank_cpu = rank.detach().cpu().numpy()
+            date_cpu = date_vec.detach().cpu().numpy() # Use the vector computed above
+            
+            for tmp_idx, tmp_key in enumerate(sorted_keys):
+                dataframe.loc[len(dataframe)] = [
+                    tmp_key,
+                    field_type,
+                    delta / 2,
+                    similarity_per_sample[tmp_idx],
+                    rank_cpu[tmp_idx],
+                    date_cpu[tmp_idx],
+                ]
+
+        del ref_mean, embeddings_val, penalties_val, diag_sim, rank, date_vec, similarity_vec
+        gc.collect()
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+
+        return output, dataframe
 
 class DATEEvaluator:
     """
